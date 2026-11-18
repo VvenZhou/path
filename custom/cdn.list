@@ -1,0 +1,6 @@
+# MyCdnList — CDN/mirror domains sent to the Custom group so you can switch them
+# proxy/direct yourself (rule L3 in whitelist-override.yaml).
+# One entry per line: DOMAIN,x | DOMAIN-SUFFIX,x | DOMAIN-KEYWORD,x | IP-CIDR,x/32
+DOMAIN-SUFFIX,ghproxy.link
+DOMAIN-SUFFIX,dockerproxy.link
+DOMAIN-SUFFIX,kelee.one

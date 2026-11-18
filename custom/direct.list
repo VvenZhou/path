@@ -1,0 +1,4 @@
+# MyDirectList — domains that must bypass the proxy regardless of other rules
+# (rule L3 in whitelist-override.yaml, matched before any foreign/GFW rule).
+# One entry per line: DOMAIN,x | DOMAIN-SUFFIX,x | DOMAIN-KEYWORD,x | IP-CIDR,x/32
+DOMAIN-SUFFIX,asusgo.com
