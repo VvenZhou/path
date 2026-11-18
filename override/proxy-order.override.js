@@ -4,11 +4,11 @@
 //  order of application; the YAML one replaces proxy-groups, so this must run second).
 //
 //  Why this file exists: the YAML override's pool group uses `include-all: true`, and mihomo
-//  does NOT keep subscription order for that — measured on your core (Meta v1.19.34):
-//      include-all member list  ==  sorted(names)   →  DE 2.39 Mbps 183.67 ms first
-//      subscription order       ==  cf.vven.us.ci, US 3.77 Mbps…, US 3.67 Mbps…
+//  does NOT keep subscription order for that — measured on Mihomo Meta v1.19.34:
+//      include-all member list  ==  sorted(names)      →  nodes in alphabetical order
+//      explicit proxies: list   ==  the provider's own order (often the preferred node first)
 //  Only an explicit `proxies:` list keeps order, and hard-coding 60 node names would break
-//  the config the moment your airport renames a node. So the list is rebuilt at load time
+//  the config the moment the provider renames a node. So the list is rebuilt at load time
 //  from whatever the subscription actually contains — order preserved, never stale.
 // =====================================================================================
 

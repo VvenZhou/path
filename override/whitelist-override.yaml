@@ -16,12 +16,12 @@
 #    🚀 Custom-proxy   your custom/proxy.list          default = 🌏 Proxy
 #    🌐 Custom-cdn     your custom/cdn.list            default = 🌏 Proxy
 #    🎯 Custom-direct  your custom/direct.list         default = DIRECT (bypass)
-#    🌏 Proxy          the node pool (all 60 nodes)    default = subscription's first node
+#    🌏 Proxy          the node pool (every node)      default = subscription's first node
 #                       plain select: no url-test ⇒ zero background probe traffic; node order kept
 #                       by proxy-order.override.js (README §1b)
 #    🛑 Ads            every ad/tracking match         default = REJECT
-#    🔎 CF-scan       your cfnb-next cron job (probe SNI + speed.cloudflare.com)
-#                                                    default = DIRECT; REJECT = kill switch
+#    🔎 CF-scan       a scheduled CF-IP optimiser's own hostnames (cfnb-next: PROBE_HOST
+#                       + its bandwidth host)       default = DIRECT; REJECT = kill switch
 #    ☁️ Cloudflare     every CF hostname + every CF range  default = DIRECT (bypass) — one group:
 #                       what had to be pulled out of browsing was the scan, and that is done by
 #                       hostname rules in L3a, not by IP-vs-domain rules (see the L3 note)
@@ -52,9 +52,9 @@
 #    no use:/include-all, and those groups only exist as targets of its 10 632 rules — which section 4
 #    replaces anyway, so keeping them would leave 5 dead groups in the UI and tray.
 #    The three Custom-* groups come first; the DEFAULT of a select group is its FIRST member.
-#    Your 60 nodes are untouched: they live in the `proxies:` array, which 🌏 Proxy pulls in via include-all.
-#    No `icon:` keys anywhere: you asked for the icon badges off, so Party shows its letter
-#    avatar. To bring one back, add an `icon:` line inside a group block, e.g.
+#    The subscription's nodes are untouched: they live in the `proxies:` array, which 🌏 Proxy pulls in.
+#    No `icon:` keys anywhere — without them Party shows a letter avatar instead of a badge.
+#    To bring one back, add an `icon:` line inside a group block, e.g.
 #    icon: https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Global.png
 # -------------------------------------------------------------------------------------
 proxy-groups:
@@ -70,7 +70,7 @@ proxy-groups:
     proxies:
       - "🌏 Proxy"                 # ← default: through the proxy pool
       - DIRECT                     # ← or bypass
-      # - "DE 2.39 Mbps 183.67 ms" # one specific node, for these hosts only
+      # - "a node name"             # one specific node, for these hosts only
 
   - name: "🌐 Custom-cdn"          # ← your custom/cdn.list (mirrors / CDN endpoints)
     type: select
@@ -84,8 +84,8 @@ proxy-groups:
       - DIRECT                     # ← default: bypass
       - "🌏 Proxy"                 # ← or force these hosts through the proxy
 
-  # ⓪b 🔎 CF-scan — your cfnb-next cron job, isolated from browsing. The only reliable signal is
-  #     the SNI it puts in the ClientHello: PinnedResolver dials the pinned IP but keeps
+  # ⓪b 🔎 CF-scan — a scheduled Cloudflare-IP optimiser (cfnb-next), isolated from browsing. The
+  #     only reliable signal is the SNI it puts in the ClientHello: PinnedResolver dials the IP but keeps
   #     SNI/Host = the URL host, and your sniffer (parse-pure-ip: true, override-destination: false)
   #     passes that name to the domain matchers — so the two DOMAIN lines in L3a capture every
   #     probe and every bandwidth pull, even though the connections carry bare CF addresses.
@@ -96,16 +96,16 @@ proxy-groups:
   - name: "🔎 CF-scan"
     type: select
     proxies:
-      - DIRECT                     # ← default: measure your own line, zero quota
+      - DIRECT                     # ← default: measure the local line, zero quota
       - "🌏 Proxy"
       - REJECT
 
   # ① 🌏 Proxy pool — auto-includes every node of the subscription (junk filtered out).
   #    NO url-test here on purpose: a select group never probes its members, so the
-  #    health-check traffic this used to generate is 0 (60 nodes × 6 KB × 288 sweeps/day
-  #    ≈ 5 GB/month would have been spent purely on probing).
-  #    Default = the FIRST node in the pool (today: cf.vven.us.ci, the same one your
-  #    subscription lists first). No node name is hard-coded, so a rename on the next
+  #    health-check traffic this used to generate is 0 (a 60-node pool would spend
+  #    60 × 6 KB × 288 sweeps/day ≈ 5 GB/month purely on probing).
+  #    Default = the FIRST node in the pool — the same one the subscription lists first.
+  #    No node name is hard-coded, so a rename on the next
   #    subscription update can never make the core refuse to start.
   - name: "🌏 Proxy"
     type: select
@@ -126,9 +126,9 @@ proxy-groups:
   #     the scan, a Cloudflare name and a Cloudflare address are the same destination.
   #     Flip to 🌏 Proxy only if you want Cloudflare's own APIs (dash.cloudflare.com, try.cloudflare.com,
   #     1.1.1.1 by name) proxied. Do not flip it to rescue a blocked CF-fronted site — pin that in
-  #     custom/proxy.list. And never flip it while cfnb-next is scanning: its probes dial CF addresses,
-  #     so the ranking would then describe the node rather than your line, and the bandwidth phase
-  #     (~120 MB per run) would come off your quota.
+  #     custom/proxy.list. And never flip it while a CF-IP scan is running: its probes dial CF
+  #     addresses, so the ranking would describe the node rather than the local line, and the scan's
+  #     bandwidth phase (a cfnb-next run pulls up to ~120 MB) would come off the subscription's quota.
   - name: "☁️ Cloudflare"
     type: select
     proxies:
@@ -147,17 +147,16 @@ proxy-groups:
 # -------------------------------------------------------------------------------------
 # 2) DNS HARDENING — resolution split along the exact same ladder as routing.
 #
-#    Why this block actually wins: your app setting is controlDns: false, and Mihomo Party
-#    2.0.4 drops its own DNS panel values before merging —
+#    Whether this block actually wins depends on the app's 控制DNS switch (`controlDns` in its
+#    config.yaml). Mihomo Party 2.0.4 drops its own DNS panel values before merging —
 #        if (!controlDns) { delete controledMihomoConfig.dns; delete controledMihomoConfig.hosts }
-#    so the dns: block below (merged over your subscription's) is the only DNS in charge.
-#    ⚠️ If you turn 控制DNS on in the app later, this block is discarded in favour of the
-#       app's DNS panel — or keep 控制DNS off and mirror it here.
+#    — so with that switch off, the dns: block below (merged over the subscription's) is the only DNS
+#    in charge. ⚠️ Turn 控制DNS on and this block is discarded in favour of the app's DNS panel.
 #
-#    What it fixes (effective config today):
-#      · plaintext fallback 8.8.4.4 / 208.67.220.220 → cleared (cleartext overseas leak)
-#      · single upstream pair (sm2.doh.pub + dns.alidns) answering EVERY domain → split
-#      · respect-rules absent (false) → overseas DoH now dials through Proxy
+#    What it fixes, compared with what subscriptions typically ship:
+#      · plaintext fallback servers (8.8.4.4 / 208.67.220.220 style) → cleared (cleartext leak)
+#      · one upstream pair answering EVERY domain → split along the same ladder as routing
+#      · respect-rules absent (false) → overseas DoH now dials through the proxy
 #      · ad rule-sets resolved before connecting → answered empty at the DNS layer
 # -------------------------------------------------------------------------------------
 dns:
@@ -234,25 +233,26 @@ dns:
 #     Mihomo Party (app.asar):
 #         if (!controlSniff) { delete controledMihomoConfig.sniffer; }
 #         const profile2 = deepMerge(currentProfile, controledMihomoConfig2);
-#     Your config.yaml has `controlSniff: true`, so the app's 域名嗅探 page values are merged ON TOP of
+#     With that card's switch on (`controlSniff: true`, the default) the app's 域名嗅探 values merge ON TOP OF
 #     this file — a live `sniffer:` key here would simply be overwritten. Set them in the app instead
 #     (sidebar 域名嗅探 card → the switch is 控制域名嗅探; the form fields carry exactly these keys).
-#     What your app ships today is its factory default and it is the right shape for this config:
+#     Mihomo Party's shipped defaults are already the right shape for this config:
 #     enable/parse-pure-ip/force-dns-mapping true, override-destination false, TLS[443], HTTP[80,443],
 #     skip-domain +.push.apple.com, skip-dst-address = the Telegram ranges.
 #     The block below is a measured reference. Use it only if you turn that card off (控制域名嗅探 = off,
 #     which deletes the app's sniffer block) and want this file to govern sniffing instead.
 #
 # sniffer:
-#   enable: true                    # off ⇒ L3a stops firing: cfnb probes fall back into ☁️ Cloudflare
-#   parse-pure-ip: true             # ← load-bearing. cfnb dials bare IPs; measured with this false the
-#                                   #   probe logged `RuleSet(CFIP) using ☁️ Cloudflare[DIRECT]` instead of
+#   enable: true                    # off ⇒ L3a stops firing: the scanner's probes fall back into
+#                                   #   ☁️ Cloudflare
+#   parse-pure-ip: true             # ← load-bearing: the scanner dials bare IPs. Measured with this
+#                                   #   false, its probe logged `RuleSet(CFIP) using ☁️ Cloudflare[DIRECT]` instead of
 #                                   #   `DomainSuffix(cloudflare-ech.com) using 🔎 CF-scan[DIRECT]`
 #   force-dns-mapping: true         # also sniff connections that already have a real IP (fake-ip-filter
 #                                   #   names, hosts-file pins) — keep it on for the pinned-CDN case
 #   override-destination: false     # KEEP false. With true the sniffed name becomes the destination: an
 #                                   #   IP-dialed connection with SNI chatgpt.com then went out through a
-#                                   #   node (`RuleSet(ForeignDomain) using 🌏 Proxy[cf.vven.us.ci]`)
+#                                   #   node (`RuleSet(ForeignDomain) using 🌏 Proxy[the pool's first node]`)
 #   sniff:
 #     TLS:
 #       ports: [443]
@@ -416,8 +416,8 @@ rules:
   #    Your word outranks every upstream set, and position is everything here: because
   #    these three rules run before the Cloudflare tier, a Cloudflare-fronted app you put
   #    in proxy.list still rides 🌏 Proxy, while ☁️ Cloudflare stays bypassed — which
-  #    is exactly what keeps a Cloudflare IP speed-test measuring your own line.
-  #    Lists live in your repo: github.com/VvenZhou/path → custom/{proxy,cdn,direct}.list.
+  #    is exactly what keeps a Cloudflare IP speed-test measuring the local line.
+  #    The three lists live in this repo: custom/{proxy,cdn,direct}.list.
   #    Hand-written pins use the same three targets and belong HERE, not below L3:
   #      - "DOMAIN-SUFFIX,chatgpt.com,🚀 Custom-proxy"        (CF-fronted but blocked → proxy)
   #      - "DOMAIN-SUFFIX,example.com,🚀 Custom-proxy"
@@ -435,16 +435,17 @@ rules:
   #    separation lives in the hostnames (L3a) and everything else Cloudflare shares one switch:
   #      names → CFDomain set + GEOSITE,cloudflare (76 records)
   #      IPs   → CFIP set + GEOIP,cloudflare + the official v4/v6 ranges
-  #    How the core decides, measured on v1.19.34 with your app's sniffer settings (enable: true,
-  #    parse-pure-ip: true, override-destination: false): the TLS SNI of a connection that dialed a
+  #    How the core decides, measured on Mihomo Meta v1.19.34 with Mihomo Party's shipped sniffer
+  #    defaults (enable: true, parse-pure-ip: true, override-destination: false): the TLS SNI of a
+  #    connection that dialed a
   #    bare IP is offered to the DOMAIN matchers, the address is offered to the IP matchers, and the
   #    first rule in this list that matches wins —
   #      www.cloudflare.com (name)               → RuleSet(CFDomain) → ☁️ Cloudflare[DIRECT]
   #      104.16.0.1 (bare IP, no SNI)            → RuleSet(CFIP)     → ☁️ Cloudflare[DIRECT]
   #      104.16.0.1 + SNI chatgpt.com            → RuleSet(CFIP)     → ☁️ Cloudflare[DIRECT]
   #        ↑ CFIP sits above ForeignDomain, so order decides it, not kind.
-  #      104.16.248.249 + SNI cloudflare-ech.com → 🔎 CF-scan[DIRECT]   ← your probe, via L3a
-  #      speed.cloudflare.com (bandwidth phase)  → 🔎 CF-scan[DIRECT]   ← your scan, via L3a
+  #      104.16.248.249 + SNI cloudflare-ech.com → 🔎 CF-scan[DIRECT]   ← a pinned-IP probe, via L3a
+  #      speed.cloudflare.com (bandwidth phase)  → 🔎 CF-scan[DIRECT]   ← the scan's downloads, via L3a
   #    Without L3a those last two would land in ☁️ Cloudflare beside real browsing (cloudflare-ech.com
   #    is itself a Cloudflare hostname) — the scan would then be invisible, and the only way to stop a
   #    runaway scan would be the ☁️ Cloudflare switch, which also bypasses every CF site you browse.
@@ -452,11 +453,11 @@ rules:
   #    it resolves to — that is why an unpinned chatgpt.com falls to L4 and gets proxied. If a
   #    CF-fronted service must be proxied, pin its domain in custom/proxy.list (L2 outranks this whole
   #    tier) rather than flipping ☁️ Cloudflare.
-  # L3a · the cfnb scanner, keyed on the two hostnames it puts in every TLS ClientHello.
+  # L3a · the CF-IP optimiser (cfnb-next), keyed on the two hostnames it puts in every ClientHello.
   #     Its PinnedResolver keeps SNI/Host = the URL host and only rewrites the destination, so
   #     these two lines lift the whole scan — latency/verify probes (PROBE_HOST) plus the
   #     bandwidth phase (BANDWIDTH_SIZE_MB 0.5 × BANDWIDTH_CANDIDATES 240 ≈ up to 120 MB per run,
-  #     which on a 30-minute cron would be gigabytes a day straight off your quota) — out of the
+  #     which on a 30-minute cron is gigabytes a day straight off the subscription's quota) — out of the
   #     Cloudflare tier and into one group with its own kill switch.
   #     No script change is needed: these are the hosts cfnb already uses. If you later change
   #     PROBE_HOST in config.json, change the first line to match.
@@ -472,7 +473,7 @@ rules:
   # L3a′ Cloudflare's own hostnames
   - "RULE-SET,CFDomain,☁️ Cloudflare"
   - "GEOSITE,cloudflare,☁️ Cloudflare"
-  # L3b · by destination IP — your scan probes land here
+  # L3b · by destination IP — bare-IP Cloudflare traffic lands here
   #     Official ranges: https://www.cloudflare.com/ips/ (offline fallback in case the
   #     rule-set download fails, so Cloudflare still bypasses).
   - "RULE-SET,CFIP,☁️ Cloudflare,no-resolve"
