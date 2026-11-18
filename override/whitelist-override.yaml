@@ -1,0 +1,538 @@
+# =====================================================================================
+#  Mihomo Party (Clash Party) custom override — WHITELIST MODE
+#  Verified against: Mihomo Party 2.0.4 (clash-party-linux-2.0.4) + core Mihomo Meta v1.19.34
+#
+#  Reference source (primary): https://github.com/HenryChiao/MIHOMO_YAMLS
+#    · rule-sets  → the 666OS/rules *.mrs sets that repo ships rules for   (mihomo/domain, mihomo/ip)
+#    · ad rules   → AWAvenue-Ads-Rule-Clash.yaml, exactly as that repo declares it
+#    · group style→ HenryChiao MihomoProPlus.yaml (select wrappers + url-test/hidden + Qure icons)
+#    · whitelist  → that repo's Accademia "[通用模版]-WhiteList" ladder: private → ads → … → Final
+#  Your own lists now live in YOUR repo (pushed 2026-11-18): https://github.com/VvenZhou/path
+#    custom/proxy.list → MyProxyList · custom/direct.list → MyDirectList · custom/cdn.list → MyCdnList
+#    Edit on GitHub or in the clone at ~/workspace/dsh/VvenZhou-path, git push, then reload the profile
+#    in Party (or wait for the 86400 s interval) — no need to touch this file.
+#
+#  Eight groups, in UI order (emoji so they are easy to spot in the tray and on the 代理 page)
+#    🚀 Custom-proxy   your custom/proxy.list          default = 🌏 Proxy
+#    🌐 Custom-cdn     your custom/cdn.list            default = 🌏 Proxy
+#    🎯 Custom-direct  your custom/direct.list         default = DIRECT (bypass)
+#    🌏 Proxy          the node pool (all 60 nodes)    default = subscription's first node
+#                       plain select: no url-test ⇒ zero background probe traffic; node order kept
+#                       by proxy-order.override.js (README §1b)
+#    🛑 Ads            every ad/tracking match         default = REJECT
+#    🔎 CF-scan       your cfnb-next cron job (probe SNI + speed.cloudflare.com)
+#                                                    default = DIRECT; REJECT = kill switch
+#    ☁️ Cloudflare     every CF hostname + every CF range  default = DIRECT (bypass) — one group:
+#                       what had to be pulled out of browsing was the scan, and that is done by
+#                       hostname rules in L3a, not by IP-vs-domain rules (see the L3 note)
+#    🐟 Final          the MATCH tail                  default = DIRECT (bypass = whitelist mode)
+#
+#    Each of your three lists owns a group, so each switches independently. China/known-direct and
+#    LAN use the core's built-in DIRECT — no group wraps it, and the Custom-* groups are members of
+#    no other group, so touching them can never disturb the rest.
+#
+#    Order = ladder: private → ads → YOUR 3 lists → scan (🔎 CF-scan) → Cloudflare (names +
+#                    ranges, one group) → foreign → China → MATCH
+#
+#  Override syntax used (Mihomo Party YAML override, deep merge):
+#    key:    array  → REPLACES the array            → `rules:`  (true whitelist)
+#    +key:   array  → PREPENDS to the array         → not used here
+#    There is no per-group merge: an array key is all-or-nothing, so `proxy-groups:` drops the
+#    subscription's own 5 groups entirely. Rename the key to `+proxy-groups:` to keep them instead.
+#    key!:   object → REPLACES the object instead of merging
+#  Docs: https://clashparty.org/docs/guide/override/yaml
+#
+#  Install: 订阅 → 覆写 → 新建 YAML → paste this file → save → bind it to your profile
+#           (or tick 全局启用) → reload the profile. Details in README.md next to this file.
+# =====================================================================================
+
+# -------------------------------------------------------------------------------------
+# 1) PROXY GROUPS — `proxy-groups:` REPLACES the subscription's 5 groups (🚀 节点选择, 🎯 全球直连,
+#    🛑 全球拦截, 🐟 漏网之鱼, ☁️ CloudFlareCDN). Verified safe for this profile: it ships no proxy-providers,
+#    no use:/include-all, and those groups only exist as targets of its 10 632 rules — which section 4
+#    replaces anyway, so keeping them would leave 5 dead groups in the UI and tray.
+#    The three Custom-* groups come first; the DEFAULT of a select group is its FIRST member.
+#    Your 60 nodes are untouched: they live in the `proxies:` array, which 🌏 Proxy pulls in via include-all.
+#    No `icon:` keys anywhere: you asked for the icon badges off, so Party shows its letter
+#    avatar. To bring one back, add an `icon:` line inside a group block, e.g.
+#    icon: https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Global.png
+# -------------------------------------------------------------------------------------
+proxy-groups:
+
+  # ⓪ YOUR three custom lists — one group each, so every list switches on its own.
+  #     Nothing else routes here: only the three rule-sets in L3 (plus rules you write yourself),
+  #     and no other group lists them as a member, so changing them never touches the ad block,
+  #     the Cloudflare tier, China-direct or the fallback tail. Hand-written pins point at these:
+  #       - DOMAIN-SUFFIX,example.com,"🚀 Custom-proxy"      (proxied)
+  #       - DOMAIN-SUFFIX,corp.example.cn,"🎯 Custom-direct" (bypassed)
+  - name: "🚀 Custom-proxy"        # ← your custom/proxy.list
+    type: select
+    proxies:
+      - "🌏 Proxy"                 # ← default: through the proxy pool
+      - DIRECT                     # ← or bypass
+      # - "DE 2.39 Mbps 183.67 ms" # one specific node, for these hosts only
+
+  - name: "🌐 Custom-cdn"          # ← your custom/cdn.list (mirrors / CDN endpoints)
+    type: select
+    proxies:
+      - "🌏 Proxy"                 # ← default: proxy
+      - DIRECT                     # ← flip when a mirror is reachable direct
+
+  - name: "🎯 Custom-direct"       # ← your custom/direct.list
+    type: select
+    proxies:
+      - DIRECT                     # ← default: bypass
+      - "🌏 Proxy"                 # ← or force these hosts through the proxy
+
+  # ⓪b 🔎 CF-scan — your cfnb-next cron job, isolated from browsing. The only reliable signal is
+  #     the SNI it puts in the ClientHello: PinnedResolver dials the pinned IP but keeps
+  #     SNI/Host = the URL host, and your sniffer (parse-pure-ip: true, override-destination: false)
+  #     passes that name to the domain matchers — so the two DOMAIN lines in L3a capture every
+  #     probe and every bandwidth pull, even though the connections carry bare CF addresses.
+  #     IP-vs-domain rules alone cannot do this: with the default PROBE_HOST those probes are filed
+  #     under ☁️ Cloudflare, right next to real browsing — which is also why ☁️ Cloudflare is one
+  #     group again: the name/address split separated browsing from browsing, not scan from browsing.
+  #     REJECT is a kill switch: flip this group to REJECT mid-run and a runaway scan stops cold.
+  - name: "🔎 CF-scan"
+    type: select
+    proxies:
+      - DIRECT                     # ← default: measure your own line, zero quota
+      - "🌏 Proxy"
+      - REJECT
+
+  # ① 🌏 Proxy pool — auto-includes every node of the subscription (junk filtered out).
+  #    NO url-test here on purpose: a select group never probes its members, so the
+  #    health-check traffic this used to generate is 0 (60 nodes × 6 KB × 288 sweeps/day
+  #    ≈ 5 GB/month would have been spent purely on probing).
+  #    Default = the FIRST node in the pool (today: cf.vven.us.ci, the same one your
+  #    subscription lists first). No node name is hard-coded, so a rename on the next
+  #    subscription update can never make the core refuse to start.
+  - name: "🌏 Proxy"
+    type: select
+    include-all: true
+    filter: '^(?!.*(DIRECT|REJECT|直接连接|官网|官方|客服|网站|网址|获取|订阅|流量|到期|已用|过期|备用|群|邀请|返利|机场|下次|版本|官址|联系|邮箱|工单|贩卖|通知|倒卖|防止|国内|地址|频道|无法|说明|使用|提示|特别|访问|支持|教程|关注|更新|作者|加入|USE|USED|TOTAL|EXPIRE|EMAIL|Panel|Channel|Author))'
+
+  # ② 🛑 Ads — switch to DIRECT / 🌏 Proxy in the UI if an ad block breaks a site
+  - name: "🛑 Ads"
+    type: select
+    proxies:
+      - REJECT                    # ← default: block
+      - DIRECT
+      - "🌏 Proxy"
+
+  # ③ ☁️ Cloudflare — every Cloudflare hostname and address range in one group. It used to be two
+  #     (names / addresses); they are merged again because what actually needed separating is your
+  #     scanner, and that is handled by the hostname rules in L3a above — for everything that is not
+  #     the scan, a Cloudflare name and a Cloudflare address are the same destination.
+  #     Flip to 🌏 Proxy only if you want Cloudflare's own APIs (dash.cloudflare.com, try.cloudflare.com,
+  #     1.1.1.1 by name) proxied. Do not flip it to rescue a blocked CF-fronted site — pin that in
+  #     custom/proxy.list. And never flip it while cfnb-next is scanning: its probes dial CF addresses,
+  #     so the ranking would then describe the node rather than your line, and the bandwidth phase
+  #     (~120 MB per run) would come off your quota.
+  - name: "☁️ Cloudflare"
+    type: select
+    proxies:
+      - DIRECT                     # ← default: bypass
+      - "🌏 Proxy"
+      - REJECT
+
+  # ④ 🐟 Final — the MATCH rule's target; whitelist tail → bypass
+  # ⑤ 🐟 Final — the MATCH rule's target; whitelist tail → bypass
+  - name: "🐟 Final"
+    type: select
+    proxies:
+      - DIRECT                   # ← default: bypass anything unmatched
+      - "🌏 Proxy"
+
+# -------------------------------------------------------------------------------------
+# 2) DNS HARDENING — resolution split along the exact same ladder as routing.
+#
+#    Why this block actually wins: your app setting is controlDns: false, and Mihomo Party
+#    2.0.4 drops its own DNS panel values before merging —
+#        if (!controlDns) { delete controledMihomoConfig.dns; delete controledMihomoConfig.hosts }
+#    so the dns: block below (merged over your subscription's) is the only DNS in charge.
+#    ⚠️ If you turn 控制DNS on in the app later, this block is discarded in favour of the
+#       app's DNS panel — or keep 控制DNS off and mirror it here.
+#
+#    What it fixes (effective config today):
+#      · plaintext fallback 8.8.4.4 / 208.67.220.220 → cleared (cleartext overseas leak)
+#      · single upstream pair (sm2.doh.pub + dns.alidns) answering EVERY domain → split
+#      · respect-rules absent (false) → overseas DoH now dials through Proxy
+#      · ad rule-sets resolved before connecting → answered empty at the DNS layer
+# -------------------------------------------------------------------------------------
+dns:
+  # keep enable: true — with 控制DNS off, dns.enable: false also wipes tun.dns-hijack
+  # (`if (!controlDns && profile.tun && !profile.dns?.enable) tun["dns-hijack"] = []`)
+  enable: true
+  ipv6: false
+
+  enhanced-mode: fake-ip          # no plaintext domain names on the CN path, fast first byte
+  fake-ip-range: 198.18.0.1/16    # stays inside GEOIP,private → already direct at L0
+  fake-ip-filter:                 # who gets REAL IPs: CN/known-direct hosts (correct CDN edge)
+    - "+.lan"
+    - "+.local"
+    - "time.*.com"
+    - "ntp.*.com"
+    - "+.market.xiaomi.com"
+    - "+.pub.3gppnetwork.org"
+    - "+.push.apple.com"
+    - "rule-set:ChinaDomain"
+    - "rule-set:KnownDirect"
+    - "rule-set:PrivateDomain"
+    # ── Cloudflare-IP pinning hook (cf speed-test / CDN-best-IP tools) ──────────────
+    #    fake-ip hands the app a 198.18.x.x placeholder, so an IP you pinned locally for a
+    #    domain would never actually be used. Add those domains here to get the real answer
+    #    back (they still match the Cloudflare tier at L3, so they stay direct):
+    # - "+.your-cf-fronted-site.com"
+    # - "cdn.example.com"
+
+  # bootstrap only — resolves the DoH hostnames below. DoT (DoH is not allowed here).
+  default-nameserver:
+    - tls://223.5.5.5
+    - tls://223.6.6.6
+
+  # default path = encrypted foreign DoH, and with respect-rules it dials via Proxy
+  nameserver:
+    - https://dns.google/dns-query
+    - https://cloudflare-dns.com/dns-query
+
+  # kill the subscription's cleartext fallback
+  fallback: []
+
+  nameserver-policy:
+    # ads & trackers never resolve → never connect (they also stop showing in 连接)
+    "rule-set:AdsBlock,AdsTrack,AdsAwa": rcode://success
+    # China / known-direct / LAN → CN DoH, direct
+    # (your custom/direct.list is left out on purpose: it is a *classical* rule-set and
+    #  mihomo warns when a classical set drives a DNS key — those domains are already
+    #  routed to Direct at L3, so direct-nameserver below resolves them anyway)
+    "rule-set:ChinaDomain,KnownDirect,PrivateDomain":
+      - https://dns.alidns.com/dns-query
+      - https://doh.pub/dns-query
+    # Cloudflare group bypasses at L2, so its lookups stay on the CN-reachable path
+    "rule-set:CFDomain":
+      - https://dns.alidns.com/dns-query
+      - https://cloudflare-dns.com/dns-query
+
+  # your proxy nodes' hostnames resolve direct — prevents resolution loops
+  proxy-server-nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+
+  # everything the rules send direct also resolves direct
+  direct-nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  direct-nameserver-follow-policy: true
+
+  # DNS-server connections themselves follow the routing rules (this is what lets the
+  # foreign DoH upstreams work at all from inside CN)
+  respect-rules: true
+
+# -------------------------------------------------------------------------------------
+# 2b) SNIFFER — deliberately left commented out, because the app currently owns this block.
+#     Mihomo Party (app.asar):
+#         if (!controlSniff) { delete controledMihomoConfig.sniffer; }
+#         const profile2 = deepMerge(currentProfile, controledMihomoConfig2);
+#     Your config.yaml has `controlSniff: true`, so the app's 域名嗅探 page values are merged ON TOP of
+#     this file — a live `sniffer:` key here would simply be overwritten. Set them in the app instead
+#     (sidebar 域名嗅探 card → the switch is 控制域名嗅探; the form fields carry exactly these keys).
+#     What your app ships today is its factory default and it is the right shape for this config:
+#     enable/parse-pure-ip/force-dns-mapping true, override-destination false, TLS[443], HTTP[80,443],
+#     skip-domain +.push.apple.com, skip-dst-address = the Telegram ranges.
+#     The block below is a measured reference. Use it only if you turn that card off (控制域名嗅探 = off,
+#     which deletes the app's sniffer block) and want this file to govern sniffing instead.
+#
+# sniffer:
+#   enable: true                    # off ⇒ L3a stops firing: cfnb probes fall back into ☁️ Cloudflare
+#   parse-pure-ip: true             # ← load-bearing. cfnb dials bare IPs; measured with this false the
+#                                   #   probe logged `RuleSet(CFIP) using ☁️ Cloudflare[DIRECT]` instead of
+#                                   #   `DomainSuffix(cloudflare-ech.com) using 🔎 CF-scan[DIRECT]`
+#   force-dns-mapping: true         # also sniff connections that already have a real IP (fake-ip-filter
+#                                   #   names, hosts-file pins) — keep it on for the pinned-CDN case
+#   override-destination: false     # KEEP false. With true the sniffed name becomes the destination: an
+#                                   #   IP-dialed connection with SNI chatgpt.com then went out through a
+#                                   #   node (`RuleSet(ForeignDomain) using 🌏 Proxy[cf.vven.us.ci]`)
+#   sniff:
+#     TLS:
+#       ports: [443]
+#     HTTP:
+#       ports: [80, 443]
+#       override-destination: false
+#     QUIC:
+#       ports: [443]                # optional addition, not measured live: names HTTP/3 connections too,
+#                                   #   so QUIC to a bare CF IP stops hiding behind the IP rules
+#   skip-domain:
+#     - "+.push.apple.com"
+#   skip-dst-address:               # the app default (Telegram ranges) — fine. But NEVER add a Cloudflare
+#     - 149.154.160.0/20            # range here: measured with 104.16.0.0/13 present, those probes logged
+#     - …                           # `RuleSet(CFIP) using ☁️ Cloudflare` while 188.114.96.5 (outside the
+#                                   #   list) still matched `DomainSuffix(cloudflare-ech.com) → 🔎 CF-scan`
+#   # skip-src-address: []          # skip sniffing by SOURCE address — only useful if the scanner runs on
+#                                   # another machine and you want it deliberately left un-sniffed
+#   # force-domain: []              # force sniffing for known-name connections (accepts geosite:/rule-set:
+#                                   # sets). Nothing in this config needs it.
+#
+# -------------------------------------------------------------------------------------
+# 3) RULE-SETS (rule-providers) — merged into the config, deep-merge safe.
+#    Same upstream the reference repo uses. All *.mrs (binary rule-sets, cached by core).
+#    Note: with respect-rules (section 2) these fetches follow the routing ladder too — the core logs
+#    `[TCP] mihomo --> raw.githubusercontent.com:443 match GeoSite(gfw) using Proxy[…]`. Put
+#    `proxy: DIRECT` in a provider block if you want that one downloaded direct.
+# -------------------------------------------------------------------------------------
+rule-providers:
+
+  # --- ads / tracking --------------------------------------------------------------
+  AdsAwa:
+    type: http
+    behavior: domain
+    format: yaml
+    interval: 86400
+    url: https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/Filters/AWAvenue-Ads-Rule-Clash.yaml
+  AdsBlock:
+    type: http
+    behavior: domain
+    format: mrs
+    interval: 86400
+    url: https://github.com/666OS/rules/raw/release/mihomo/domain/Advertising.mrs
+  AdsTrack:
+    type: http
+    behavior: domain
+    format: mrs
+    interval: 86400
+    url: https://github.com/666OS/rules/raw/release/mihomo/domain/Tracking.mrs
+  AdsIP:
+    type: http
+    behavior: ipcidr
+    format: mrs
+    interval: 86400
+    url: https://github.com/666OS/rules/raw/release/mihomo/ip/Advertising.mrs
+
+  # --- Cloudflare -------------------------------------------------------------------
+  CFDomain:
+    type: http
+    behavior: domain
+    format: mrs
+    interval: 86400
+    url: https://github.com/666OS/rules/raw/release/mihomo/domain/Cloudflare.mrs
+  CFIP:
+    type: http
+    behavior: ipcidr
+    format: mrs
+    interval: 86400
+    url: https://github.com/666OS/rules/raw/release/mihomo/ip/Cloudflare.mrs
+
+  # --- GFW-blocked + popular foreign sites (curated aggregate) ----------------------
+  ForeignDomain:
+    type: http
+    behavior: domain
+    format: mrs
+    interval: 86400
+    url: https://github.com/666OS/rules/raw/release/mihomo/domain/Proxy.mrs
+  ForeignIP:
+    type: http
+    behavior: ipcidr
+    format: mrs
+    interval: 86400
+    url: https://github.com/666OS/rules/raw/release/mihomo/ip/Proxy.mrs
+
+  # --- China / known-direct / private ----------------------------------------------
+  ChinaDomain:
+    type: http
+    behavior: domain
+    format: mrs
+    interval: 86400
+    url: https://github.com/666OS/rules/raw/release/mihomo/domain/China.mrs
+  KnownDirect:
+    type: http
+    behavior: domain
+    format: mrs
+    interval: 86400
+    url: https://github.com/666OS/rules/raw/release/mihomo/domain/Direct.mrs
+  PrivateDomain:
+    type: http
+    behavior: domain
+    format: mrs
+    interval: 86400
+    url: https://github.com/666OS/rules/raw/release/mihomo/domain/Private.mrs
+  ChinaIP:
+    type: http
+    behavior: ipcidr
+    format: mrs
+    interval: 86400
+    url: https://github.com/666OS/rules/raw/release/mihomo/ip/China.mrs
+  PrivateIP:
+    type: http
+    behavior: ipcidr
+    format: mrs
+    interval: 86400
+    url: https://github.com/666OS/rules/raw/release/mihomo/ip/Private.mrs
+
+  # --- your own hand-written lists (reference repo's editable files) ---------------
+  # Paste your own domains into these on GitHub, or change the URL to a local file
+  # (type: file + path). Rules pointing at them are already in place, see L3 below.
+  #  These three are yours: raw.githubusercontent.com/VvenZhou/path/main/custom/<name>.list
+  MyProxyList:
+    type: http
+    behavior: classical
+    format: text
+    interval: 86400
+    url: https://raw.githubusercontent.com/VvenZhou/path/main/custom/proxy.list
+  MyDirectList:
+    type: http
+    behavior: classical
+    format: text
+    interval: 86400
+    url: https://raw.githubusercontent.com/VvenZhou/path/main/custom/direct.list
+  MyCdnList:
+    type: http
+    behavior: classical
+    format: text
+    interval: 86400
+    url: https://raw.githubusercontent.com/VvenZhou/path/main/custom/cdn.list
+
+# -------------------------------------------------------------------------------------
+# 4) RULES — plain `rules:` REPLACES the subscription's 12k+ rules.
+#    Order = ladder: private → ads → YOUR 3 lists → scan (🔎 CF-scan) → Cloudflare (names + ranges)
+#                    → foreign → China → MATCH
+#    (your lists sit above Cloudflare on purpose — see the L2 note: it is what lets a
+#     Cloudflare IP speed-test run direct while CF-fronted apps still ride the proxy)
+#    (first match wins; whitelist tail = bypass).
+# -------------------------------------------------------------------------------------
+rules:
+
+  # ── L0 · private / LAN / anti-loop (must stay on top) ──────────────────────────────
+  - RULE-SET,PrivateDomain,DIRECT
+  - RULE-SET,PrivateIP,DIRECT,no-resolve
+  - GEOIP,private,DIRECT,no-resolve
+
+  # ── L1 · ads & trackers → 🛑 Ads (default REJECT) ────────────────────────────────
+  - "RULE-SET,AdsAwa,🛑 Ads"
+  - "RULE-SET,AdsBlock,🛑 Ads"
+  - "RULE-SET,AdsTrack,🛑 Ads"
+  - "RULE-SET,AdsIP,🛑 Ads,no-resolve"
+
+  # ── L2 · YOUR three lists, one group each — deliberately ABOVE Cloudflare ────────
+  #    Your word outranks every upstream set, and position is everything here: because
+  #    these three rules run before the Cloudflare tier, a Cloudflare-fronted app you put
+  #    in proxy.list still rides 🌏 Proxy, while ☁️ Cloudflare stays bypassed — which
+  #    is exactly what keeps a Cloudflare IP speed-test measuring your own line.
+  #    Lists live in your repo: github.com/VvenZhou/path → custom/{proxy,cdn,direct}.list.
+  #    Hand-written pins use the same three targets and belong HERE, not below L3:
+  #      - "DOMAIN-SUFFIX,chatgpt.com,🚀 Custom-proxy"        (CF-fronted but blocked → proxy)
+  #      - "DOMAIN-SUFFIX,example.com,🚀 Custom-proxy"
+  #      - "DOMAIN-KEYWORD,intranet-tool,🚀 Custom-proxy"
+  #      - "IP-CIDR,203.0.113.7/32,🚀 Custom-proxy,no-resolve"
+  #      - "DOMAIN-SUFFIX,fast-mirror.net,🌐 Custom-cdn"
+  #      - "DOMAIN-SUFFIX,corp.example.cn,🎯 Custom-direct"   (bypass even if CF-fronted)
+  - "RULE-SET,MyProxyList,🚀 Custom-proxy"
+  - "RULE-SET,MyCdnList,🌐 Custom-cdn"
+  - "RULE-SET,MyDirectList,🎯 Custom-direct"
+
+  # ── L3 · Cloudflare — one group for every CF name and range, scan lifted out above it ──
+  #    One group, not two: the names/addresses split bought nothing, because a browser and a probe
+  #    agree about where Cloudflare is and differ only in what they claim to be visiting. So the
+  #    separation lives in the hostnames (L3a) and everything else Cloudflare shares one switch:
+  #      names → CFDomain set + GEOSITE,cloudflare (76 records)
+  #      IPs   → CFIP set + GEOIP,cloudflare + the official v4/v6 ranges
+  #    How the core decides, measured on v1.19.34 with your app's sniffer settings (enable: true,
+  #    parse-pure-ip: true, override-destination: false): the TLS SNI of a connection that dialed a
+  #    bare IP is offered to the DOMAIN matchers, the address is offered to the IP matchers, and the
+  #    first rule in this list that matches wins —
+  #      www.cloudflare.com (name)               → RuleSet(CFDomain) → ☁️ Cloudflare[DIRECT]
+  #      104.16.0.1 (bare IP, no SNI)            → RuleSet(CFIP)     → ☁️ Cloudflare[DIRECT]
+  #      104.16.0.1 + SNI chatgpt.com            → RuleSet(CFIP)     → ☁️ Cloudflare[DIRECT]
+  #        ↑ CFIP sits above ForeignDomain, so order decides it, not kind.
+  #      104.16.248.249 + SNI cloudflare-ech.com → 🔎 CF-scan[DIRECT]   ← your probe, via L3a
+  #      speed.cloudflare.com (bandwidth phase)  → 🔎 CF-scan[DIRECT]   ← your scan, via L3a
+  #    Without L3a those last two would land in ☁️ Cloudflare beside real browsing (cloudflare-ech.com
+  #    is itself a Cloudflare hostname) — the scan would then be invisible, and the only way to stop a
+  #    runaway scan would be the ☁️ Cloudflare switch, which also bypasses every CF site you browse.
+  #    These IP rules carry `no-resolve`, so a name-based connection is never matched by the CF address
+  #    it resolves to — that is why an unpinned chatgpt.com falls to L4 and gets proxied. If a
+  #    CF-fronted service must be proxied, pin its domain in custom/proxy.list (L2 outranks this whole
+  #    tier) rather than flipping ☁️ Cloudflare.
+  # L3a · the cfnb scanner, keyed on the two hostnames it puts in every TLS ClientHello.
+  #     Its PinnedResolver keeps SNI/Host = the URL host and only rewrites the destination, so
+  #     these two lines lift the whole scan — latency/verify probes (PROBE_HOST) plus the
+  #     bandwidth phase (BANDWIDTH_SIZE_MB 0.5 × BANDWIDTH_CANDIDATES 240 ≈ up to 120 MB per run,
+  #     which on a 30-minute cron would be gigabytes a day straight off your quota) — out of the
+  #     Cloudflare tier and into one group with its own kill switch.
+  #     No script change is needed: these are the hosts cfnb already uses. If you later change
+  #     PROBE_HOST in config.json, change the first line to match.
+  #     Two sniffer settings are load-bearing for these two lines: 域名嗅探 on with `parse-pure-ip: true`,
+  #     and no Cloudflare range inside `skip-dst-address`. Measured both ways in README §4b — either one
+  #     puts the probes back under ☁️ Cloudflare (still DIRECT, so nothing breaks; the scan simply stops
+  #     being visible as its own group, and its kill switch goes with it).
+  - "DOMAIN-SUFFIX,cloudflare-ech.com,🔎 CF-scan"
+  - "DOMAIN,speed.cloudflare.com,🔎 CF-scan"
+  #     Drop the speed.cloudflare.com line if you also run Cloudflare's own speed test in a
+  #     browser and would rather it sat under ☁️ CF-domain; a browser has no reason to visit
+  #     cloudflare-ech.com, so that line is scan-only in practice.
+  # L3a′ Cloudflare's own hostnames
+  - "RULE-SET,CFDomain,☁️ Cloudflare"
+  - "GEOSITE,cloudflare,☁️ Cloudflare"
+  # L3b · by destination IP — your scan probes land here
+  #     Official ranges: https://www.cloudflare.com/ips/ (offline fallback in case the
+  #     rule-set download fails, so Cloudflare still bypasses).
+  - "RULE-SET,CFIP,☁️ Cloudflare,no-resolve"
+  - "GEOIP,cloudflare,☁️ Cloudflare,no-resolve"
+  # Official Cloudflare IPv4 ranges (https://www.cloudflare.com/ips/) — offline fallback
+  # so Cloudflare still bypasses if the rule-set download fails.
+  - "IP-CIDR,173.245.48.0/20,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,103.21.244.0/22,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,103.22.200.0/22,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,103.25.60.0/22,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,103.28.56.0/22,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,103.28.60.0/22,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,104.16.0.0/13,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,104.24.0.0/14,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,141.101.64.0/18,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,162.158.0.0/15,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,172.64.0.0/13,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,198.41.128.0/17,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,192.172.138.0/24,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,190.93.240.0/20,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,188.114.96.0/20,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,172.70.0.0/13,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,131.0.72.0/22,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,1.0.0.0/24,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR,1.1.1.0/24,☁️ Cloudflare,no-resolve"
+  # Official Cloudflare IPv6 ranges
+  - "IP-CIDR6,2400:cb00::/32,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR6,2606:4700::/32,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR6,2803:f800::/32,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR6,2405:b500::/32,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR6,2405:8100::/32,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR6,2a06:98c0::/29,☁️ Cloudflare,no-resolve"
+  - "IP-CIDR6,2c0f:f248::/32,☁️ Cloudflare,no-resolve"
+
+  # ── L4 · GFW-blocked + popular foreign sites → Proxy ───────────────────────────
+  #    ForeignDomain = 666OS Proxy.mrs: GFWList + popular foreign services (Google,
+  #    YouTube, X, Instagram, Reddit, GitHub, OpenAI/AI, Netflix, …) in one set.
+  #    GEOSITE,gfw adds meta-rules-dat's gfw coverage on top.
+  - "RULE-SET,ForeignDomain,🌏 Proxy"
+  - "GEOSITE,gfw,🌏 Proxy"
+  - "RULE-SET,ForeignIP,🌏 Proxy,no-resolve"
+  # Optional per-service split — uncomment the rule-providers you want and route them
+  # to their own groups. Same upstream, same *.mrs style:
+  #   AI:         {type: http, behavior: domain, format: mrs, interval: 86400,
+  #                url: https://github.com/666OS/rules/raw/release/mihomo/domain/OpenAI.mrs}
+  #   GitHubSet:  {…/domain/GitHub.mrs}   YouTube: {…/domain/YouTube.mrs}
+  #   Telegram:   {…/domain/Telegram.mrs} Netflix: {…/domain/Netflix.mrs}
+  # and add `- "RULE-SET,AI,🌏 Proxy"` style rules in L4 above.
+
+  # ── L5 · China mainland + known-direct → built-in DIRECT ───────────────────────
+  - RULE-SET,ChinaDomain,DIRECT
+  - RULE-SET,KnownDirect,DIRECT
+  - GEOSITE,cn,DIRECT
+  - RULE-SET,ChinaIP,DIRECT,no-resolve
+  - GEOIP,CN,DIRECT
+
+  # ── L5b · optional hybrid: proxy every non-CN IP that survived the ladder ─────────
+  #    Closes the hole for IP-only endpoints that CN cannot reach. Costs you the strict
+  #    "whitelist" semantics, so it ships disabled.
+  # - "NOT,((GEOIP,CN)),🌏 Proxy"
+
+  # ── L6 · whitelist tail — everything unmatched bypasses ───────────────────────────
+  - "MATCH,🐟 Final"
